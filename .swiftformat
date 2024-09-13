@@ -1,0 +1,36 @@
+# file options
+
+ --exclude Build,Tests/SettlementProviderTests/Resources,Package.swift,Sources/Generated,Documentation,Resources,.*
+
+# formate options
+
+--binarygrouping 4,4
+--decimalgrouping 3,3
+--exponentcase lowercase
+--header "{file}\nCreated by {author.name} on {created}."
+--ifdef outdent
+--indent 4
+--maxwidth 120
+--octalgrouping 3,3
+--organizationmode visibility
+--self init-only
+--swiftversion 5
+--trimwhitespace always
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--xcodeindentation enabled
+--nospaceoperators ...,..>,..<
+
+# rules
+
+--enable blankLineAfterImports
+--enable hoistPatternLet
+--enable isEmpty
+--enable preferKeyPath
+--enable redundantSelf
+--enable redundantReturn
+--enable sortImports
+--enable trailingClosures
+
+--disable strongOutlets

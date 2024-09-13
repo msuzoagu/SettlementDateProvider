@@ -1,0 +1,12 @@
+.netrc
+/.build
+/Packages
+.DS_Store
+xcuserdata/
+DerivedData/
+
+# Ignore complete .swiftpm directory since Xcode shows schemes from dependencies
+# For more details, see discussions in:
+# https://github.com/swiftlang/swift-package-manager/pull/2209
+# https://github.com/sersoft-gmbh/xmlwrangler#122
+.swiftpm

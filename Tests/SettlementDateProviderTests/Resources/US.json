@@ -1,0 +1,71 @@
+{
+    "rules": [
+        {
+            "name": "New Year's Day",
+            "monthDay": "January 1",
+            "type": "fixed"
+        },
+        {
+            "name": "Dr. Martin Luther King, Jr. Day",
+            "month": "January",
+            "week": "3",
+            "weekDay": "Monday",
+            "type": "dynamic"
+        },
+        {
+            "name": "Washington's Birthday (Presidents' Day)",
+            "month": "February",
+            "week": "3",
+            "weekDay": "Monday",
+            "type": "dynamic"
+        },
+        {
+            "name": "Memorial Day",
+            "month": "May",
+            "week": "last",
+            "weekDay": "Monday",
+            "type": "dynamic"
+        },
+        {
+            "name": "Juneteenth",
+            "monthDay": "June 19",
+            "type": "fixed"
+        },
+        {
+            "name": "Independence Day",
+            "monthDay": "July 4",
+            "type": "fixed"
+        },
+        {
+            "name": "Labor Day",
+            "month": "September",
+            "week": "1",
+            "weekDay": "Monday",
+            "type": "dynamic"
+        },
+        {
+            "name": "Columbus Day/Indigenous People's Day",
+            "month": "October",
+            "week": "2",
+            "weekDay": "Monday",
+            "type": "dynamic"
+        },
+        {
+            "name": "Veterans' Day",
+            "monthDay": "November 11",
+            "type": "fixed"
+        },
+        {
+            "name": "Thanksgiving Day",
+            "month": "November",
+            "week": "4",
+            "weekDay": "Thursday",
+            "type": "dynamic"
+        },
+        {
+            "name": "Christmas Day",
+            "monthDay": "December 25",
+            "type": "fixed"
+        }
+    ]
+}
