@@ -1,4 +1,4 @@
-name: MilestoneFeatureManager
+name: Feature
 
 on:
   pull_request:
@@ -23,6 +23,7 @@ jobs:
 
   addMilestone:
     runs-on: ubuntu-latest
+    needs: pr
     steps:
       - name: Extract Milestone Name From Base Branch
         id: milestone_name
@@ -79,6 +80,7 @@ jobs:
 
   addLabel:
     runs-on: ubuntu-latest
+    needs: [pr, add]
     steps:
       - name: Extract feature name from base branch
         id: feature_name
