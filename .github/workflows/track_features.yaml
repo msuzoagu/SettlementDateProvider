@@ -80,7 +80,7 @@ jobs:
 
   addLabel:
     runs-on: ubuntu-latest
-    needs: [pr, add]
+    needs: [pr, addMilestone]
     steps:
       - name: Extract feature name from base branch
         id: feature_name

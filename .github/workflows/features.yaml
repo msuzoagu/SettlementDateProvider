@@ -1,0 +1,53 @@
+name: Changelog
+
+on:
+  pull_request:
+    head:
+      - '*-milestone-*'
+    branches:
+      - '*-milestone'
+    types: [open]
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  pr:
+    uses: msuzoagu/reusable/.github/workflows/pull_request.yaml@main
+    with:
+      platform: ubuntu-latest
+
+  create:
+    runs-on: ubuntu-latest
+    # if: ${{ github.event.pull_request.merged == true }}
+    needs: pr
+    env:
+      HEAD_BRANCH: ${{ needs.pr.outputs.HEAD_BRANCH }}
+      PR_TITLE: ${{ needs.pr.outputs.PR_TITLE }}
+      PR_AUTHOR: ${{ needs.pr.outputs.PR_AUTHOR }}
+      BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Title Check
+        run: |
+          if [[ "${{env.PR_TITLE}}" != "feat:"* ]]; then
+            echo "PRs for features must start with feat: "
+            exit 1
+          fi
+
+      - name: Extract Feature Message
+        id: feature_message
+        run: |
+          TITLE="${{ env.PR_TITLE }}"
+          MESSAGE=$(echo "${TITLE}" | sed -E 's/^feat:(.*)$/\1/')
+          echo "MESSAGE=${MESSAGE}" >> $GITHUB_ENV
+
+      - name: Update Features file in Base Branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const message = '${{ env.TEXT }}';
+            console.log(message);
