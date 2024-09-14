@@ -1,13 +1,10 @@
 name: Prep
 
 on:
-  pull_request:
-    head:
+  push:
+    branches:
       - 'release/**'
       - 'hotfix/**'
-    branches:
-      - development
-    types: [opened, synchronize]
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -18,52 +15,405 @@ permissions:
 
 jobs:
   build:
-    uses: msuzoagu/reusable/.github/workflows/release.yaml@main
-    with:
-      platform: ubuntu-latest
+    runs-on: ubuntu-latest
+    outputs:
+      BRANCH_NAME: ${{ steps.branch.outputs.name }}
+      REPO_NAME: ${{ steps.repo.outputs.name }}
+      VERSION: ${{ steps.version.outputs.number }}
+      RELEASE_TITLE: ${{ steps.release.outputs.title }}
+      NEW_TAG: ${{ steps.new.outputs.tag }}
+      OLD_TAG: ${{ steps.old.outputs.tag }}
+      LAST_RELEASE_TAG: ${{ steps.last.outputs.tag }}
+      LAST_RELEASE_PRESENCE: ${{ steps.last.outputs.presence }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  pr:
-    needs: build
-    uses: msuzoagu/reusable/.github/workflows/pull_request.yaml@main
-    with:
-      platform: ubuntu-latest
+      - name: Retrieve Tags
+        run: |
+          git fetch --tags
+
+      - name: Head Branch Name
+        id: branch
+        run: |
+          BRANCH_NAME=$(echo "${GITHUB_REF#refs/heads/}")
+          echo "name=${BRANCH_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Repository Name
+        id: repo
+        run: |
+          echo "name=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Branch Name
+        run: |
+          VAR="${{ steps.branch.outputs.name }}"
+          set -euo pipefail
+          echo "Debug: Branch name is ${VAR}"
+
+          if [[ ! "${VAR}" =~ ^(release|hotfix)\/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid branch: ${VAR}"
+            echo "A release can only be performed on branches with format:"
+            echo "release/vmajor.minor.patch or hotfix/vmajor.minor.patch"
+            exit 1
+          fi
+
+      - name: Set Release Version
+        id: version
+        run: |
+          branch="${{ steps.branch.outputs.name }}"
+          set -euo pipefail
+
+          VER=$( echo "${branch}" | sed -E 's/^(release|hotfix)\/(v[0-9]+\.[0-9]+\.[0-9]+)$/\2/')
+
+          if [[ -z "${VER}" ]]; then
+            echo "Failed to extract release version from branch: $branch"
+            echo "A release can only be performed on branches with format:"
+            echo "release/vmajor.minor.patch or hotfix/vmajor.minor.patch"
+            exit 1
+          fi
+          echo "${VER}"
+          echo "number=${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Release Title
+        id: release
+        run: |
+          name="${{ steps.repo.outputs.name }}"
+          version="${{ steps.version.outputs.number }}"
+
+          if [[ -z "${name}" || -z "${version}" ]]; then
+            echo "Failed to extract repo_name: ${name} or release_version: ${version}"
+            exit 1
+          fi
+
+          echo "title=${name} ${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Most Recent Tag
+        id: new
+        run: |
+          newest_merged_tag=$(git tag --sort=-committerdate --merged | head -n 1)
+
+          if [[ -n "${newest_merged_tag}" ]]; then
+            echo "tag=${newest_merged_tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Oldest Tag
+        id: old
+        run: |
+          oldest_merged_tag=$(git tag --sort=committerdate --merged | head -n 1)
+
+          if [[ -n "${oldest_merged_tag}" ]]; then
+            echo "tag=${oldest_merged_tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Last Release
+        id: last
+        run: |
+          releases_count=$(gh release list --exclude-drafts --exclude-pre-releases --json tagName | jq 'length')
+
+          echo "Number of Releases: ${releases_count}"
+
+          if [[ "${releases_count}" -gt 0 ]]; then
+
+            last_release=$(gh release list --json tagName,isLatest -jq '.[] | select(.isLatest == true) | .tagName')
+
+            if [[ -n "${last_release}" ]]; then
+              echo "tag=${last_release}" >> "$GITHUB_OUTPUT"
+              echo "presence=true" >> "$GITHUB_TOKEN"
+            else
+              echo "presence=false" >> "$GITHUB_OUTPUT"
+            fi
+
+          else
+            echo "presence=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Access Branch Name from Budild Job
+        run: |
+          echo "Branch Name: ${{ steps.branch.outputs.name }}"
+          echo "REPO Name: ${{ steps.repo.outputs.name }}"
+          echo "Version Number: ${{ steps.version.outputs.number }}"
+          echo "Release Title: ${{ steps.release.outputs.title }}"
+          echo "New Tag: ${{ steps.new.outputs.tag }}"
+          echo "Old Tag: ${{ steps.old.outputs.tag }}"
+          echo "Last Release Tag: ${{ steps.last.outputs.tag }}"
+          echo "Last Release Presence: ${{ steps.last.outputs.presence }}"
 
   validate:
-    needs: pr
+    needs: [build]
+    if: ${{ needs.build.outputs.LAST_RELEASE_PRESENCE == 'false' && needs.build.outputs.NEW_TAG == '' && needs.build.outputs.OLD_TAG == '' }}
     runs-on: ubuntu-latest
-    if: ${{ needs.build.outputs.LAST_RELEASE_PRESENT == 'false' && needs.build.outputs.NEW_TAG == '' && needs.build.outputs.OLD_TAG == '' }}
+    env:
+      BRANCH_NAME: ${{ needs.build.outputs.BRANCH_NAME }}
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
     outputs:
-      first_release: ${{ steps.check.outputs.first_release}}
+      LIST_OF_COMMITS: ${{ steps.commits.outputs.list }}
+      FIRST_RELEASE: ${{ steps.check.outputs.first_release}}
     steps:
       - name: Set First Release Status
         id: check
         run: |
           echo "first_release=true" >> "$GITHUB_OUTPUT"
 
-  draftFirstReleaseNote:
-    needs: [build, validate]
-    runs-on: ubuntu-latest
-    if: ${{ needs.validate.outputs.first_release == 'true' }}
-    env:
-      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
-      VERSION: ${{ needs.build.outputs.VERSION }}
-      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
-    steps:
-      - name: Draft Release Note
+      - name: Get List of Commits
+        if: ${{ steps.check.outputs.first_release == 'true' }}
+        id: commits
         uses: actions/github-script@v7
         with:
           script: |
             (async () => {
               let page = 1;
               let commitList = [];
-              const branch = process.env.HEAD_BRANCH;
+              const branch = process.env.BRANCH_NAME;
+
+              while(true) {
+                const { data: commits} = await github.rest.repos.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: branch,
+                  per_page: 100,
+                  page: page,
+                });
+
+                // console.log(commits)
+
+                commitList = commitList.concat(commits);
+                if (commits.length < 100) break; // fewer than 100 signals last page
+                page++;
+              }
+
+              // console.log(commitList);
+              core.setOutput('list', JSON.stringify(commitList));
+            })();
+
+  categorize:
+    needs: [build, validate]
+    if: ${{ needs.validate.outputs.FIRST_RELEASE == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      BRANCH_NAME: ${{ needs.build.outputs.BRANCH_NAME }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
+      LIST_OF_COMMITS: ${{ needs.validate.outputs.LIST_OF_COMMITS }}
+    outputs:
+      CATEGORIES: ${{ steps.cat.outputs.res }}
+    steps:
+      - name: Retrieve Categories
+        id: cat
+        uses: actions/github-script@v7
+        with:
+          script: |
+            (async () => {
+              const categories = {
+                doc: [],
+                fix: [],
+                test: [],
+                chore: [],
+                style: [],
+                feature: [],
+                refactor: []
+              }
+
+              const version = process.env.VERSION;
+              const branch = process.env.BRANCH_NAME;
+              const releaseTitle = process.env.RELEASE_TITLE;
+              const commitList = JSON.parse(process.env.LIST_OF_COMMITS);
+
+              async function categorizeCommitByMessageSubject(categoriesObj) {
+                commitList.forEach((commit) => {
+                  const message = commit.commit.message;
+                  Object.keys(categoriesObj).forEach((category) => {
+                    if (message.includes(category)) {
+                      categoriesObj[category].push(commit);
+                    }
+                  });
+                });
+
+                return categoriesObj;
+              }
+
+              const res = await categorizeCommitByMessageSubject(categories);
+
+              core.setOutput('res', JSON.stringify(res));
+            })();
+
+  extract:
+    needs: [build, validate, categorize]
+    if: ${{ needs.validate.outputs.FIRST_RELEASE == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      BRANCH_NAME: ${{ needs.build.outputs.BRANCH_NAME }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
+      CATEGORIES: ${{ needs.categorize.outputs.CATEGORIES }}
+    outputs:
+      NON_TECHNICAL_USERS: ${{ steps.doubleFaced.outputs.organza }}
+      CODE_CONTRIBUTORS: ${{ steps.doubleFaced.outputs.hold }}
+    steps:
+      - name: Extract Information
+        id: doubleFaced
+        uses: actions/github-script@v7
+        with:
+          script: |
+            (async () => {
+              const uniq = JSON.parse(process.env.CATEGORIES);
+              const branch = process.env.BRANCH_NAME;
               const version = process.env.VERSION;
               const releaseTitle = process.env.RELEASE_TITLE;
 
-              const today = new Date();
-              const dateString = today.toISOString().split('T')[0];
+              const unattachedCommits = [];
+              let commitSection = '#### Commits Not Attached to PullRequests\n';
 
-              console.log(`Release Title: ${releaseTitle}`);
+              let fixesAndFeatures = {
+                Fix: "",
+                Feature: ""
+              }
+
+              function capitalize(word) {
+                return word.charAt(0).toUpperCase() + word.slice(1);
+              }
+
+              async function getPullRequestsForCommit(sha) {
+                const pulls = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: sha
+                });
+
+                if (pulls.data.length > 0) {
+                  const pr = pulls.data[0];
+
+                  //if (pr.state == "open"){
+                  //  console.log(`Error: PR #${pr.number} is still open`);
+                  //  console.log("You can't have open prs on release/hotfix branches");
+                  //  process.exit(1);
+                  //}
+
+                  return {
+                    title: pr.title,
+                    number: pr.number,
+                    author: pr.user.login
+                  };
+                }
+                return null // if no PR is associated with this commit
+              }
+
+              async function sectionFor(commitSubj, commitObj) {
+                const title = capitalize(commitSubj);
+                let sectionNotes = `### ${title}\n`;
+
+                if (commitObj.length > 0) {
+
+                  for ( const commit of commitObj) {
+                    const pr = await getPullRequestsForCommit(commit.sha);
+
+                    const commitLink = `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${commit.sha}`;
+
+                    if (pr) {
+                      sectionNotes += `- PR #${pr.number}: ${pr.title} (Author: ${pr.author})\n`;
+                    } else {
+                      unattachedCommits.push(`- Commit [${commit.commit.message}](${commitLink})`);
+                    }
+
+                    if (title === 'Fix' || title === 'Feature') {
+                      fixesAndFeatures[title] = sectionNotes;
+                    }
+                  }
+                }
+
+                let result = `${sectionNotes}`;
+                return result;
+              }
+
+              let allSections = '';
+              for (const [key, value] of Object.entries(uniq)) {
+                const section = await sectionFor(key, value)
+                allSections += section + '\n';
+
+                let utf8Result = new TextEncoder().encode(allSections);
+                let base64Result = btoa(String.fromCharCode(...utf8Result));
+                console.log(base64Result);
+                core.setOutput('hold', base64Result);
+              }
+
+              //console.log(fixesAndFeatures);
+
+              const base64Output = Buffer.from(JSON.stringify(fixesAndFeatures)).toString('base64');
+
+              //console.log('Base64 encoded output:', base64Output);
+              core.setOutput('organza', base64Output);
+            })();
+
+  update:
+    needs: [build, validate,extract]
+    runs-on: ubuntu-latest
+    env:
+      CODE_CONTRIBUTORS: ${{ needs.extract.outputs.CODE_CONTRIBUTORS }}
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      BRANCH_NAME: ${{ needs.build.outputs.BRANCH_NAME }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
+    steps:
+      - name: Set Date
+        id: set_date
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const today = new Date();
+            const dateString = today.toISOString().split('T')[0];
+            core.setOutput('date', dateString);
+
+      - name: Changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = process.env.VERSION;
+            const branch = process.env.BRANCH_NAME;
+            const base64String = process.env.CODE_CONTRIBUTORS;
+            const releaseTitle = process.env.RELEASE_TITLE;
+            const date = '${{ steps.set_date.outputs.date }}';
+            const decodedContent = Buffer.from(base64String, 'base64').toString('utf8');
+
+            const { data: logData } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'CHANGELOG.md',
+              ref: branch,
+            });
+
+            let existingContent = Buffer.from(logData.content, 'base64').toString('utf8');
+
+            let newContent = `## [Unreleased]\n\n## Released ${version} on [${date}]\n ${decodedContent}`;
+
+            existingContent = existingContent.replace(
+              /## \[Unreleased\]/,
+              `${newContent.trim()}`
+            );
+
+            console.log(existingContent)
+
+      - name: Features
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = process.env.VERSION;
+            const branch = process.env.BRANCH_NAME;
+            const releaseTitle = process.env.RELEASE_TITLE;
+            const date = '${{ steps.set_date.outputs.date }}';
+
+      - name: Draft First Release Note
+        uses: actions/github-script@v7
+        if: ${{ needs.validate.outputs.first_release == 'true' }}
+        with:
+          script: |
+            (async () => {
+              let page = 1;
+              let commitList = [];
+              const version = process.env.VERSION;
+              const branch = process.env.BRANCH_NAME;
+              const releaseTitle = process.env.RELEASE_TITLE;
+              const date = '${{ steps.set_date.outputs.date }}';
 
               while (true) {
                 const { data: commits } = await github.rest.repos.listCommits({
@@ -75,46 +425,45 @@ jobs:
                 });
 
                 commitList = commitList.concat(commits);
-                if (commits.length < 100) break; //stop if no more commits are returned
+                if (commits.length < 100) break; // < 100 signals last page
                 page++;
               }
 
-              let notes = `## ${version} - ${dateString}\n\n### What's Changed:\n\n`;
+              let notes = `## What's New \n ###### ${date}\n\n`;
               commitList.forEach((commit) => {
                 notes += `- ${commit.commit.message}\n`;
               });
               console.log(notes);
 
-              let existingDraft;  //Check for draft release
+              let existingDraftReleaseNote; // check for exisiting draft
               try {
                 const { data: allReleases } = await github.rest.repos.listReleases({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo
-                  });
+                  owner: context.repo.owner,
+                  repo: context.repo.repo
+                });
 
-                  existingDraft = allReleases.find(r => r.name === releaseTitle && r.draft);
-
-              } catch (error) {
+                existingDraftReleaseNote = allReleases.find(r => r.name === releaseTitle && r.draft);
+              } catch(error) {
                 if (error.status === 404) {
-                  console.log("No existing draft release found, creating a new one");
+                  console.log("No exisiting draft release found, creating a new one ...");
                 } else {
                   throw error;
                 }
               }
 
-              if (existingDraft) {
+              if (existingDraftReleaseNote) {
 
-                let updatedNotes = existingDraft.body
+                let updatedNotes = existingDraftReleaseNote.body;
 
                 await github.rest.repos.updateRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  release_id: existingDraft.id,
+                  release_id: existingDraftReleaseNote.id,
                   name: releaseTitle,
                   body: updatedNotes,
                   draft: true,
                 });
-              } else { //create a new draft release if no draft exists
+              } else { // create a new draft if no draft exists
                 await github.rest.repos.createRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -123,153 +472,14 @@ jobs:
                   body: notes,
                   draft: true,
                 });
-
-                //core.setOutput('release_notes', notes);
+                //core.setOutput('release_notes', notes)
               }
             })();
 
-  draftChangeLog:
-    needs: [build]
-    runs-on: ubuntu-latest
-    env:
-      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
-      VERSION: ${{ needs.build.outputs.VERSION }}
-      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
-    steps:
-      - name: Draft Changelog Changes
+      # complete this
+      - name: Draft Release Note
         uses: actions/github-script@v7
+        if: ${{ needs.validate.outputs.first_release == 'false' }}
         with:
           script: |
-            (async () => {
-              let page = 1;
-              let allPullRequest = [];
-              const headBranch = process.env.HEAD_BRANCH;
-              const version = process.env.VERSION;
-              const releaseTitle = process.env.RELEASE_TITLE
-
-              console.log(headBranch)
-
-              const today = new Date();
-              const dateString = today.toISOString().split('T')[0];
-
-              const { data: featuresFileData } = await github.rest.repos.getContent({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                path: 'CHANGELOG.md',
-                ref: headBranch,
-              });
-
-              async function getCommitsInBranch(branch) {
-                const commits = await github.rest.repos.listCommits({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  sha: headBranch,
-                  per_page: 100
-                });
-
-                return commits.data.map(commit => commit.sha);
-              }
-
-              async function getPullRequestForCommit(sha) {
-                const pulls = await github.rest(`Get /repos/${context.repo.owner}/${context.repo.repo}/commits/${sha}/pulls`, {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  commit_sha: sha
-                });
-
-                if (pulls.data.length > 0) {
-                  const pr = pulls.data[0];
-                  return {
-                    title: pr.title,
-                    number: pr.number,
-                    author: pr.user.login
-                  };
-                }
-                return null; //if no PR is associated with this commit
-              }
-
-              const commits = await getCommitsInBranch(branch);
-
-              let changelog = '';
-              for(const commitSha of commits) {
-                const prDetails = await getPullRequestForCommit(commitSha);
-
-                if (prDetails) {
-                  changelog += `- PR #${prDetails.number}: ${prDetails.title} (Author: ${prDetails.author})\n`;
-                }
-              }
-
-              console.log('Changelog created:\n, changelog')
-            });
-
-  draftFeaturesList:
-    needs: [build]
-    runs-on: ubuntu-latest
-    env:
-      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
-      VERSION: ${{ needs.build.outputs.VERSION }}
-      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
-    steps:
-      - name: Draft FeaturesList
-        uses: actions/github-script@v7
-        with:
-          script: |
-            (async () => {
-              let page = 1;
-              let allPullRequest = [];
-              const headBranch = process.env.HEAD_BRANCH;
-              const version = process.env.VERSION;
-              const releaseTitle = process.env.RELEASE_TITLE
-
-              console.log(headBranch)
-
-              const today = new Date();
-              const dateString = today.toISOString().split('T')[0];
-
-              const { data: featuresFileData } = await github.rest.repos.getContent({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                path: 'FEATURES.md',
-                ref: headBranch,
-              });
-
-              async function getCommitsInBranch(branch) {
-                const commits = await github.rest.repos.listCommits({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  sha: headBranch,
-                  per_page: 100
-                });
-
-                return commits.data.map(commit => commit.sha);
-              }
-
-              async function getPullRequestForCommit(sha) {
-                const pulls = await github.rest(`Get /repos/${context.repo.owner}/${context.repo.repo}/commits/${sha}/pulls`, {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  commit_sha: sha
-                });
-
-                if (pulls.data.length > 0) {
-                  const pr = pulls.data[0];
-                  return {
-                    title: pr.title
-                  };
-                }
-                return null; //if no PR is associated with this commit
-              }
-
-              const commits = await getCommitsInBranch(branch);
-
-              let featuresList = '';
-              for(const commitSha of commits) {
-                const prDetails = await getPullRequestForCommit(commitSha);
-
-                if (prDetails) {
-                  featuresList += `- ${prDetails.title}\n`;
-                }
-              }
-
-              console.log('FeaturesList created:\n, featuresList')
-            });
+            echo "Hello"
