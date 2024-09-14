@@ -1,4 +1,4 @@
-name: Feature
+name: Track
 
 on:
   pull_request:
@@ -21,7 +21,7 @@ jobs:
     with:
       platform: ubuntu-latest
 
-  addMilestone:
+  milestone:
     runs-on: ubuntu-latest
     needs: pr
     steps:
@@ -78,9 +78,9 @@ jobs:
             });
             console.log(`Attached Milestone: ${milestoneName} to PR`)
 
-  addLabel:
+  featureLabel:
     runs-on: ubuntu-latest
-    needs: [pr, add]
+    needs: [pr, milestone]
     steps:
       - name: Extract feature name from base branch
         id: feature_name

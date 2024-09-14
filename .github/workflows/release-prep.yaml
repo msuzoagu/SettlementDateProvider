@@ -1,0 +1,275 @@
+name: Prep
+
+on:
+  pull_request:
+    head:
+      - 'release/**'
+      - 'hotfix/**'
+    branches:
+      - development
+    types: [opened, synchronize]
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  build:
+    uses: msuzoagu/reusable/.github/workflows/release.yaml@main
+    with:
+      platform: ubuntu-latest
+
+  pr:
+    needs: build
+    uses: msuzoagu/reusable/.github/workflows/pull_request.yaml@main
+    with:
+      platform: ubuntu-latest
+
+  validate:
+    needs: pr
+    runs-on: ubuntu-latest
+    if: ${{ needs.build.outputs.LAST_RELEASE_PRESENT == 'false' && needs.build.outputs.NEW_TAG == '' && needs.build.outputs.OLD_TAG == '' }}
+    outputs:
+      first_release: ${{ steps.check.outputs.first_release}}
+    steps:
+      - name: Set First Release Status
+        id: check
+        run: |
+          echo "first_release=true" >> "$GITHUB_OUTPUT"
+
+  draftFirstReleaseNote:
+    needs: [build, validate]
+    runs-on: ubuntu-latest
+    if: ${{ needs.validate.outputs.first_release == 'true' }}
+    env:
+      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
+    steps:
+      - name: Draft Release Note
+        uses: actions/github-script@v7
+        with:
+          script: |
+            (async () => {
+              let page = 1;
+              let commitList = [];
+              const branch = process.env.HEAD_BRANCH;
+              const version = process.env.VERSION;
+              const releaseTitle = process.env.RELEASE_TITLE;
+
+              const today = new Date();
+              const dateString = today.toISOString().split('T')[0];
+
+              console.log(`Release Title: ${releaseTitle}`);
+
+              while (true) {
+                const { data: commits } = await github.rest.repos.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: branch,
+                  per_page: 100,
+                  page: page,
+                });
+
+                commitList = commitList.concat(commits);
+                if (commits.length < 100) break; //stop if no more commits are returned
+                page++;
+              }
+
+              let notes = `## ${version} - ${dateString}\n\n### What's Changed:\n\n`;
+              commitList.forEach((commit) => {
+                notes += `- ${commit.commit.message}\n`;
+              });
+              console.log(notes);
+
+              let existingDraft;  //Check for draft release
+              try {
+                const { data: allReleases } = await github.rest.repos.listReleases({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo
+                  });
+
+                  existingDraft = allReleases.find(r => r.name === releaseTitle && r.draft);
+
+              } catch (error) {
+                if (error.status === 404) {
+                  console.log("No existing draft release found, creating a new one");
+                } else {
+                  throw error;
+                }
+              }
+
+              if (existingDraft) {
+
+                let updatedNotes = existingDraft.body
+
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: existingDraft.id,
+                  name: releaseTitle,
+                  body: updatedNotes,
+                  draft: true,
+                });
+              } else { //create a new draft release if no draft exists
+                await github.rest.repos.createRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: version,
+                  name: releaseTitle,
+                  body: notes,
+                  draft: true,
+                });
+
+                //core.setOutput('release_notes', notes);
+              }
+            })();
+
+  draftChangeLog:
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
+    steps:
+      - name: Draft Changelog Changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            (async () => {
+              let page = 1;
+              let allPullRequest = [];
+              const headBranch = process.env.HEAD_BRANCH;
+              const version = process.env.VERSION;
+              const releaseTitle = process.env.RELEASE_TITLE
+
+              console.log(headBranch)
+
+              const today = new Date();
+              const dateString = today.toISOString().split('T')[0];
+
+              const { data: featuresFileData } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: 'CHANGELOG.md',
+                ref: headBranch,
+              });
+
+              async function getCommitsInBranch(branch) {
+                const commits = await github.rest.repos.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: headBranch,
+                  per_page: 100
+                });
+
+                return commits.data.map(commit => commit.sha);
+              }
+
+              async function getPullRequestForCommit(sha) {
+                const pulls = await github.rest(`Get /repos/${context.repo.owner}/${context.repo.repo}/commits/${sha}/pulls`, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: sha
+                });
+
+                if (pulls.data.length > 0) {
+                  const pr = pulls.data[0];
+                  return {
+                    title: pr.title,
+                    number: pr.number,
+                    author: pr.user.login
+                  };
+                }
+                return null; //if no PR is associated with this commit
+              }
+
+              const commits = await getCommitsInBranch(branch);
+
+              let changelog = '';
+              for(const commitSha of commits) {
+                const prDetails = await getPullRequestForCommit(commitSha);
+
+                if (prDetails) {
+                  changelog += `- PR #${prDetails.number}: ${prDetails.title} (Author: ${prDetails.author})\n`;
+                }
+              }
+
+              console.log('Changelog created:\n, changelog')
+            });
+
+  draftFeaturesList:
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
+      VERSION: ${{ needs.build.outputs.VERSION }}
+      RELEASE_TITLE: ${{ needs.build.outputs.RELEASE_TITLE }}
+    steps:
+      - name: Draft FeaturesList
+        uses: actions/github-script@v7
+        with:
+          script: |
+            (async () => {
+              let page = 1;
+              let allPullRequest = [];
+              const headBranch = process.env.HEAD_BRANCH;
+              const version = process.env.VERSION;
+              const releaseTitle = process.env.RELEASE_TITLE
+
+              console.log(headBranch)
+
+              const today = new Date();
+              const dateString = today.toISOString().split('T')[0];
+
+              const { data: featuresFileData } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: 'FEATURES.md',
+                ref: headBranch,
+              });
+
+              async function getCommitsInBranch(branch) {
+                const commits = await github.rest.repos.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: headBranch,
+                  per_page: 100
+                });
+
+                return commits.data.map(commit => commit.sha);
+              }
+
+              async function getPullRequestForCommit(sha) {
+                const pulls = await github.rest(`Get /repos/${context.repo.owner}/${context.repo.repo}/commits/${sha}/pulls`, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: sha
+                });
+
+                if (pulls.data.length > 0) {
+                  const pr = pulls.data[0];
+                  return {
+                    title: pr.title
+                  };
+                }
+                return null; //if no PR is associated with this commit
+              }
+
+              const commits = await getCommitsInBranch(branch);
+
+              let featuresList = '';
+              for(const commitSha of commits) {
+                const prDetails = await getPullRequestForCommit(commitSha);
+
+                if (prDetails) {
+                  featuresList += `- ${prDetails.title}\n`;
+                }
+              }
+
+              console.log('FeaturesList created:\n, featuresList')
+            });
