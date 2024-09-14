@@ -1,4 +1,4 @@
-name: Changelog
+name: AddFeatureMessage
 
 on:
   pull_request:
@@ -16,19 +16,21 @@ permissions:
   contents: write
 
 jobs:
-  pr:
-    uses: msuzoagu/reusable/.github/workflows/pull_request.yaml@main
-    with:
-      platform: ubuntu-latest
+  # pr:
+  #   uses: msuzoagu/reusable/.github/workflows/pull_request.yaml@main
+  #   with:
+  #     platform: ubuntu-latest
 
   create:
     runs-on: ubuntu-latest
     # if: ${{ github.event.pull_request.merged == true }}
-    needs: pr
+    # needs: pr
     env:
-      HEAD_BRANCH: ${{ needs.pr.outputs.HEAD_BRANCH }}
-      PR_TITLE: ${{ needs.pr.outputs.PR_TITLE }}
-      PR_AUTHOR: ${{ needs.pr.outputs.PR_AUTHOR }}
+      # HEAD_BRANCH: ${{ needs.pr.outputs.HEAD_BRANCH }}
+      # PR_TITLE: ${{ needs.pr.outputs.PR_TITLE }}
+      # PR_AUTHOR: ${{ needs.pr.outputs.PR_AUTHOR }}
+      HEAD_BRANCH: ${{ github.event.pull_request.base.head }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
       BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Title Check
